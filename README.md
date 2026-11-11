@@ -25,9 +25,19 @@ supabase db push                      # creates profiles / jobs / materials + RL
 
 ### 2. Phone login (SMS)
 
-Supabase dashboard → **Authentication → Sign In / Providers → Phone**: turn it on and add your **Twilio** (or MessageBird) credentials. Each code costs a fraction of a cent.
+Phone login is set up from `supabase/config.toml`:
 
-While testing you can skip Twilio: in the same screen, add **test phone numbers** with fixed codes (e.g. `17025550100` → `123456`). The local config in `supabase/config.toml` already has that test number.
+```bash
+SUPABASE_AUTH_SMS_TWILIO_AUTH_TOKEN=placeholder supabase config push
+```
+
+That turns on phone login with one **test number**: `702-555-0100` with code `123456`. No SMS is sent for it, so it works before you have an SMS provider. The Twilio values in the config are placeholders, so **real numbers won't get a code yet**. Email/password sign-up is switched off on purpose (the app is phone-only).
+
+`config push` applies its changes straight away without asking, so read the diff it prints.
+
+**Real texts are not set up yet.** The plan is **Telnyx**, once its 10DLC registration is approved. Telnyx is not one of Supabase's built-in SMS providers (those are Twilio, Twilio Verify, MessageBird, Textlocal and Vonage), so it can't just be pasted into the dashboard. It goes through Supabase's **Send SMS hook**: a small edge function that Supabase calls with the phone number and code, and that sends the text through the Telnyx API. That function still has to be written. It will need a Telnyx API key (set as a Supabase secret) and the approved sending number.
+
+Until then the Twilio values in `supabase/config.toml` stay as placeholders; they only exist so phone login is switched on for the test number.
 
 ### 3. Claude parsing (edge function)
 
@@ -36,7 +46,7 @@ supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
 supabase functions deploy parse-materials
 ```
 
-The function uses `claude-opus-5-5` at low effort, with server-side refusal fallback turned on. It gives Claude **5 seconds**; if Claude is slow, errors, or declines, it splits the text with plain rules instead, so the user is never blocked. If the function logs show `using fallback` often, switch to a faster model:
+Only a logged-in app user can call the function; the public app key on its own gets a 401 (so strangers can't spend your Claude credit). The function uses `claude-opus-5-5` at low effort, with server-side refusal fallback turned on. It gives Claude **5 seconds**; if Claude is slow, errors, or declines, it splits the text with plain rules instead, so the user is never blocked. Measured on 2026-11-10 from the deployed function: about 2.5s for a typical list, 3–3.6s for a 12-item list, 4.5s on the first call after it has been idle; 13 of 13 calls came back from Claude. If the function logs show `using fallback` often, switch to a faster model:
 
 ```bash
 supabase secrets set CLAUDE_MODEL=claude-haiku-5-5
@@ -73,6 +83,14 @@ On the phone: open the site → Share → **Add to Home Screen** (iPhone), or me
 | Schema + RLS | `supabase/migrations/` |
 
 **Offline / bad signal.** Every change is saved on the phone first and queued. The queue syncs when signal comes back (on reconnect, on app focus, and every 30s). IDs are made on the phone, so items added offline keep their identity. The unsent text in the box is saved too. If there's no signal when you tap "Add to list", the simple splitter runs on the phone.
+
+**Picked up.** Checking an item off moves it to a "Picked up" section and fills the progress bar on the job and its card. When only some items are checked, the Send sheet asks whether to send what's still needed (the default) or everything. "Clear" on the Picked up section removes those items after a supply run (with Undo).
+
+**Editing an item.** Tap an item to change it: − / + for the quantity and one-tap chips for common units (the list is `units` in `src/lib/i18n.ts`, one per language).
+
+**Install hint.** The Jobs screen shows a one-time "Put this on your home screen" card: an Install button on Android/Chrome, the Share steps on iPhone. It hides once the app is installed or dismissed (`src/lib/install.ts`).
+
+**Jobs.** Tap the job name or ⋯ on the materials screen to rename a job, change its address, or delete it. Deleting asks first and removes the job's items too.
 
 **No mic?** If the browser has no speech recognition (some iPhones, especially as an installed app), the mic button hides and the app says "Tap the mic on your keyboard to talk." Keyboard dictation works everywhere.
 

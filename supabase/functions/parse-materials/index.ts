@@ -1,13 +1,18 @@
 // parse-materials: free speech → [{ qty, unit, item }]
 // Calls Claude; if that fails, refuses, or takes longer than 5s, falls back to plain rules.
-// It never returns an error for a usable request — the contractor is never blocked.
+// A logged-in user's request never gets an error back — the contractor is never blocked.
 
 import Anthropic from 'npm:@anthropic-ai/sdk@1.6.0'
 import { fallbackParse, type Lang, type ParsedItem } from '../_shared/fallback.ts'
 
 const MODEL = Deno.env.get('CLAUDE_MODEL') ?? 'claude-opus-5-5'
 const TIMEOUT_MS = 5000
+const AUTH_TIMEOUT_MS = 2000
 const MAX_TEXT = 2000
+
+// Set by Supabase for every edge function.
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')
 
 const client = new Anthropic({
   apiKey: Deno.env.get('ANTHROPIC_API_KEY'),
@@ -84,6 +89,26 @@ function clean(items: unknown): ParsedItem[] {
   return out
 }
 
+/**
+ * Only a logged-in app user may spend Claude tokens. The gateway's JWT check alone
+ * isn't enough: it also lets through anyone holding the public app key, which ships
+ * in the web app. So ask Supabase Auth whose token this is.
+ */
+async function isSignedIn(req: Request): Promise<boolean> {
+  const token = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
+  const apikey = SUPABASE_ANON_KEY ?? req.headers.get('apikey')
+  if (!token || !apikey || !SUPABASE_URL) return false
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey, Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 async function parseWithClaude(text: string, lang: Lang): Promise<ParsedItem[] | null> {
   const useFallbacks = !MODEL.includes('haiku') // Haiku has no server-side refusal fallback
   const response = await client.beta.messages.create(
@@ -115,6 +140,8 @@ async function parseWithClaude(text: string, lang: Lang): Promise<ParsedItem[] |
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405)
+  // The app splits the text on the phone when this fails, so the user still isn't blocked.
+  if (!(await isSignedIn(req))) return json({ error: 'Log in first' }, 401)
 
   let text = ''
   let lang: Lang = 'en'
