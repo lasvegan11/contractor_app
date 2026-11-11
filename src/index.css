@@ -7,7 +7,38 @@
   --color-ink: #111111;
   --color-muted: #404040;
   --color-danger: #b91c1c;
+  --color-ok: #15803d;
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* Short, purposeful motion: where things came from, what just changed. */
+  --animate-sheet-up: sheet-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-fade-in: fade-in 180ms ease-out;
+  --animate-toast-in: toast-in 180ms ease-out;
+  --animate-flash: flash 1400ms ease-out;
+
+  @keyframes sheet-up {
+    from {
+      transform: translateY(100%);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem);
+    }
+  }
+  /* Newly added rows start yellow and settle to their normal background. */
+  @keyframes flash {
+    from,
+    35% {
+      background-color: var(--color-brand);
+    }
+  }
 }
 
 :root {
@@ -38,4 +69,15 @@ label {
 :focus-visible {
   outline: 4px solid var(--color-brand);
   outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

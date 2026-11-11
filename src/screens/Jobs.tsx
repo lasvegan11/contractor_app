@@ -1,19 +1,37 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useApp } from '../AppContext'
-import { Button, LangToggle, PlusIcon, Sheet, TextField, UserIcon } from '../components/ui'
+import {
+  Button,
+  CheckIcon,
+  ChevronRightIcon,
+  ClipboardIcon,
+  CloudOffIcon,
+  DownloadIcon,
+  LangToggle,
+  PinIcon,
+  PlusIcon,
+  Progress,
+  ShareIcon,
+  Sheet,
+  TextField,
+  UserIcon,
+} from '../components/ui'
 import { cachedJobs, createJob, loadJobs, onSyncChange } from '../lib/data'
 import { timeAgo } from '../lib/i18n'
+import { useInstallHint } from '../lib/install'
+import { useOfflinePending } from '../lib/useOfflinePending'
 import { prettyPhone } from '../lib/phone'
 import type { Job } from '../lib/types'
 
 /** Screen 2: list of jobs, newest first, and a big "+ New Job" button. */
 export function Jobs() {
-  const { t, lang, uid } = useApp()
+  const { t, uid, profile } = useApp()
   const navigate = useNavigate()
   const [jobs, setJobs] = useState<Job[]>(() => (uid ? cachedJobs(uid) : []))
   const [creating, setCreating] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
+  const offline = useOfflinePending(uid)
 
   useEffect(() => {
     if (!uid) return
@@ -31,40 +49,49 @@ export function Jobs() {
 
   return (
     <div className="mx-auto flex min-h-dvh max-w-xl flex-col">
-      <header className="sticky top-0 z-10 flex items-center gap-2 border-b-2 border-ink bg-white px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
-        <h1 className="flex-1 truncate text-3xl font-black">{t.jobs}</h1>
-        <LangToggle />
-        <button
-          type="button"
-          onClick={() => setAccountOpen(true)}
-          aria-label={t.account}
-          className="flex size-12 items-center justify-center rounded-xl border-2 border-ink active:bg-gray-100"
-        >
-          <UserIcon />
-        </button>
-      </header>
+      <div className="sticky top-0 z-10">
+        <header className="flex items-center gap-2 border-b-2 border-ink bg-white px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
+          <div className="min-w-0 flex-1">
+            {(profile?.business_name || profile?.name) && (
+              <p className="truncate text-sm font-bold tracking-wide text-muted uppercase">
+                {profile.business_name || profile.name}
+              </p>
+            )}
+            <h1 className="truncate text-3xl leading-tight font-black">{t.jobs}</h1>
+          </div>
+          <LangToggle />
+          <button
+            type="button"
+            onClick={() => setAccountOpen(true)}
+            aria-label={t.account}
+            className="flex size-12 items-center justify-center rounded-xl border-2 border-ink active:bg-gray-100"
+          >
+            <UserIcon />
+          </button>
+        </header>
+        {offline && (
+          <div className="flex items-center gap-2 bg-ink px-4 py-2 text-base font-semibold text-white">
+            <CloudOffIcon className="size-5" />
+            {t.unsynced}
+          </div>
+        )}
+      </div>
 
       <main className="flex-1 px-4 pt-4 pb-32">
+        <InstallHint />
         {jobs.length === 0 ? (
-          <div className="py-16 text-center">
-            <p className="text-2xl font-black">{t.noJobs}</p>
-            <p className="mt-2 text-lg text-muted">{t.noJobsHint}</p>
+          <div className="flex flex-col items-center py-16 text-center">
+            <span className="flex size-20 items-center justify-center rounded-3xl bg-brand">
+              <ClipboardIcon className="size-10" />
+            </span>
+            <p className="mt-5 text-2xl font-black">{t.noJobs}</p>
+            <p className="mt-2 max-w-xs text-lg text-muted">{t.noJobsHint}</p>
           </div>
         ) : (
           <ul className="space-y-3">
             {jobs.map((job) => (
               <li key={job.id}>
-                <Link
-                  to={`/job/${job.id}`}
-                  className="block rounded-2xl border-2 border-ink bg-white p-4 active:bg-gray-100"
-                >
-                  <div className="text-xl font-black break-words">{job.name}</div>
-                  {job.address && <div className="mt-0.5 text-base text-muted">{job.address}</div>}
-                  <div className="mt-2 flex items-center gap-2 text-base font-semibold">
-                    <span className="rounded-lg bg-brand px-2 py-0.5 text-ink">{t.items(job.item_count)}</span>
-                    <span className="text-muted">· {timeAgo(job.updated_at, lang)}</span>
-                  </div>
-                </Link>
+                <JobCard job={job} />
               </li>
             ))}
           </ul>
@@ -92,6 +119,79 @@ export function Jobs() {
       />
       <AccountSheet open={accountOpen} onClose={() => setAccountOpen(false)} />
     </div>
+  )
+}
+
+/** One-time nudge to put the app on the home screen. Hidden once installed or dismissed. */
+function InstallHint() {
+  const { t } = useApp()
+  const { mode, install, dismiss } = useInstallHint()
+  if (!mode) return null
+  return (
+    <aside className="mb-4 rounded-2xl border-2 border-dashed border-ink bg-brand/25 p-4">
+      <div className="flex items-start gap-3">
+        <img src="/favicon.svg" alt="" className="size-12 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-lg leading-snug font-black">{t.installTitle}</p>
+          <p className="mt-1 text-base leading-snug text-muted">
+            {mode === 'ios' && <ShareIcon className="mr-1 inline size-5 align-[-0.2em] text-ink" />}
+            {mode === 'ios' ? t.installIOS : t.installAndroid}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 flex gap-2">
+        {mode === 'prompt' && (
+          <Button variant="dark" className="min-h-12 flex-1" onClick={() => void install()}>
+            <DownloadIcon />
+            {t.install}
+          </Button>
+        )}
+        <Button variant="outline" className="min-h-12 flex-1" onClick={dismiss}>
+          {mode === 'ios' ? t.gotIt : t.notNow}
+        </Button>
+      </div>
+    </aside>
+  )
+}
+
+function JobCard({ job }: { job: Job }) {
+  const { t, lang } = useApp()
+  const total = job.item_count
+  const picked = Math.min(job.picked_count, total)
+  const done = total > 0 && picked === total
+  return (
+    <Link
+      to={`/job/${job.id}`}
+      className="flex items-center gap-2 rounded-2xl border-2 border-ink bg-white py-4 pr-2 pl-4 active:bg-gray-100"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="text-xl leading-snug font-black break-words">{job.name}</div>
+        {job.address && (
+          <div className="mt-1 flex items-center gap-1 text-base text-muted">
+            <PinIcon className="size-4 shrink-0" />
+            <span className="truncate">{job.address}</span>
+          </div>
+        )}
+        <div className="mt-3 flex items-center justify-between gap-3 text-base font-semibold">
+          {total === 0 ? (
+            <span className="rounded-lg bg-gray-100 px-2 py-0.5 text-muted">{t.noItemsYet}</span>
+          ) : (
+            <span className="rounded-lg bg-brand px-2 py-0.5 text-ink">{t.items(total)}</span>
+          )}
+          <span className="truncate text-muted">{timeAgo(job.updated_at, lang)}</span>
+        </div>
+        {picked > 0 && (
+          <div className="mt-3 flex items-center gap-3 text-base font-semibold">
+            <Progress value={picked} max={total} label={t.pickedOf(picked, total)} className="min-w-12 flex-1" />
+            <span className={`flex shrink-0 items-center gap-1 ${done ? 'text-ok' : 'text-ink'}`}>
+              <CheckIcon className="size-4" />
+              {done ? t.allPickedUp : t.pickedShort(picked, total)}
+            </span>
+          </div>
+        )}
+      </div>
+      <ChevronRightIcon className="size-6 shrink-0 text-muted" />
+    </Link>
   )
 }
 

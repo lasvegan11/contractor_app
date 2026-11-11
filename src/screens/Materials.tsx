@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type PointerEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type PointerEvent,
+} from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../AppContext'
 import {
   BackIcon,
@@ -9,7 +18,10 @@ import {
   CopyIcon,
   MessageIcon,
   MicIcon,
+  MinusIcon,
+  MoreIcon,
   PlusIcon,
+  Progress,
   SendIcon,
   ShareIcon,
   Sheet,
@@ -22,19 +34,20 @@ import {
 import {
   cachedMaterials,
   commitMaterials,
+  deleteJob,
   loadDraft,
   loadJob,
   loadMaterials,
   newId,
   nextSortOrder,
-  onSyncChange,
-  pendingCount,
   saveDraft,
+  updateJob,
 } from '../lib/data'
 import { buildMessage, formatQty, parseQtyInput } from '../lib/format'
 import { parseMaterials } from '../lib/parse'
+import { useOfflinePending } from '../lib/useOfflinePending'
 import { useSpeech } from '../lib/useSpeech'
-import type { Job, Material } from '../lib/types'
+import type { Job, Material, Profile } from '../lib/types'
 
 /** Screen 3: one job's material list — talk/type, edit, check off, send. */
 export function Materials() {
@@ -47,6 +60,7 @@ export function Materials() {
 
 function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
   const { t, lang, profile } = useApp()
+  const navigate = useNavigate()
   const toast = useToast('bottom-[calc(12rem+env(safe-area-inset-bottom))]')
 
   const [job, setJob] = useState<Job | null | undefined>(undefined)
@@ -56,8 +70,11 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Material | 'new' | null>(null)
   const [sendOpen, setSendOpen] = useState(false)
+  const [jobOpen, setJobOpen] = useState(false)
+  // Rows that were just added flash yellow once, so it's obvious what changed.
+  const [freshIds, setFreshIds] = useState<ReadonlySet<string>>(() => new Set())
   const offline = useOfflinePending(uid)
-  const listEndRef = useRef<HTMLDivElement>(null)
+  const addButtonRef = useRef<HTMLButtonElement>(null)
 
   const setText = useCallback(
     (value: string) => {
@@ -137,16 +154,35 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
       sort_order: start + i,
       created_at: now,
     }))
-    if (rows.length) commit((cur) => [...cur, ...rows], { upserts: rows })
+    if (!rows.length) {
+      toast.show(t.nothingFound) // keep what they said so they can fix it
+      return
+    }
+    commit((cur) => [...cur, ...rows], { upserts: rows })
+    setFreshIds(new Set(rows.map((r) => r.id)))
     setText('')
     if (!navigator.onLine) toast.show(t.offlineParsed, undefined, 6000)
-    requestAnimationFrame(() => listEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }))
+    // New items land at the end of "still needed", right above the "Add item" button.
+    requestAnimationFrame(() => addButtonRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
   }
 
   // --- item actions ----------------------------------------------------------
   function togglePicked(m: Material) {
     const updated = { ...m, picked_up: !m.picked_up }
     commit((cur) => cur.map((x) => (x.id === m.id ? updated : x)), { upserts: [updated] })
+    navigator.vibrate?.(10) // small tick on Android; iPhones ignore it
+  }
+
+  /** After a supply run: drop everything that's been picked up. */
+  function clearPicked() {
+    const gone = itemsRef.current.filter((m) => m.picked_up)
+    if (!gone.length) return
+    commit((cur) => cur.filter((m) => !m.picked_up), { deletes: gone })
+    toast.show(
+      t.removedCount(gone.length),
+      { label: t.undo, run: () => commit((cur) => [...cur, ...gone], { upserts: gone }) },
+      6000,
+    )
   }
 
   function remove(m: Material) {
@@ -166,6 +202,7 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
         created_at: new Date().toISOString(),
       }
       commit((cur) => [...cur, row], { upserts: [row] })
+      setFreshIds(new Set([row.id]))
     } else if (editing) {
       const updated = { ...editing, ...fields }
       commit((cur) => cur.map((x) => (x.id === updated.id ? updated : x)), { upserts: [updated] })
@@ -186,24 +223,59 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
   }
 
   const hasText = text.trim().length > 0
-  const message = job && profile ? buildMessage(job, profile, items, t) : ''
+  const needed = items.filter((m) => !m.picked_up)
+  const done = items.filter((m) => m.picked_up)
+  const row = (m: Material) => (
+    <ItemRow
+      key={m.id}
+      m={m}
+      fresh={freshIds.has(m.id) && !m.picked_up}
+      onToggle={() => togglePicked(m)}
+      onEdit={() => setEditing(m)}
+      onDelete={() => remove(m)}
+    />
+  )
 
   return (
     <div className="mx-auto flex h-dvh max-w-xl flex-col">
       {/* header */}
-      <header className="flex shrink-0 items-center gap-2 border-b-2 border-ink bg-white px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2">
+      <header className="flex shrink-0 items-center gap-1 border-b-2 border-ink bg-white px-1 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2">
         <Link
           to="/"
-          className="flex min-h-12 shrink-0 items-center gap-1 rounded-xl pr-3 pl-1 text-lg font-bold active:bg-gray-100"
+          aria-label={t.back}
+          className="flex size-12 shrink-0 items-center justify-center rounded-xl active:bg-gray-100"
         >
           <BackIcon className="size-7" />
-          {t.back}
         </Link>
-        <div className="min-w-0 flex-1 text-right">
-          <h1 className="truncate text-xl font-black">{job?.name ?? ''}</h1>
+        <button
+          type="button"
+          onClick={() => job && setJobOpen(true)}
+          className="min-h-12 min-w-0 flex-1 rounded-xl px-1 text-left active:bg-gray-100"
+        >
+          <h1 className="truncate text-xl leading-tight font-black">{job?.name ?? ''}</h1>
           {job?.address && <p className="truncate text-sm text-muted">{job.address}</p>}
-        </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => job && setJobOpen(true)}
+          aria-label={t.editJob}
+          className="flex size-12 shrink-0 items-center justify-center rounded-xl active:bg-gray-100"
+        >
+          <MoreIcon className="size-7" />
+        </button>
       </header>
+
+      {items.length > 0 && (
+        <div className="shrink-0 border-b-2 border-gray-200 bg-gray-50 px-4 pt-2 pb-3">
+          <div className="flex items-baseline justify-between gap-3 text-base font-bold">
+            <span className={needed.length === 0 ? 'text-ok' : ''}>
+              {needed.length === 0 ? t.allPickedUp : t.stillNeeded(needed.length)}
+            </span>
+            <span className="text-muted">{t.pickedOf(done.length, items.length)}</span>
+          </div>
+          <Progress value={done.length} max={items.length} label={t.pickedOf(done.length, items.length)} className="mt-2" />
+        </div>
+      )}
 
       {offline && (
         <div className="flex shrink-0 items-center gap-2 bg-ink px-4 py-2 text-base font-semibold text-white">
@@ -221,33 +293,45 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
             <p className="mt-2 text-lg font-semibold italic">{t.emptyExample}</p>
           </div>
         )}
-        <ul className="space-y-2">
-          {items.map((m) => (
-            <ItemRow
-              key={m.id}
-              m={m}
-              onToggle={() => togglePicked(m)}
-              onEdit={() => setEditing(m)}
-              onDelete={() => remove(m)}
-            />
-          ))}
-        </ul>
+        <ul className="space-y-2">{needed.map(row)}</ul>
         <button
+          ref={addButtonRef}
           type="button"
           onClick={() => setEditing('new')}
-          className="mt-2 flex min-h-16 w-full items-center gap-3 rounded-2xl border-2 border-dashed border-ink px-4 text-lg font-bold active:bg-gray-100"
+          className={`flex min-h-16 w-full scroll-mb-4 items-center gap-3 rounded-2xl border-2 border-dashed border-ink px-4 text-lg font-bold active:bg-gray-100 ${needed.length ? 'mt-2' : ''}`}
         >
           <PlusIcon className="size-7" />
           {t.addItem}
         </button>
-        <div ref={listEndRef} />
+        {done.length > 0 && (
+          <section className="mt-6" aria-label={t.pickedUpSection}>
+            <div className="mb-1 flex items-center justify-between gap-2 pl-1">
+              <h2 className="flex items-center gap-2 text-base font-black tracking-wide text-muted uppercase">
+                <CheckIcon className="size-5" />
+                {t.pickedUpSection} · {done.length}
+              </h2>
+              <button
+                type="button"
+                onClick={clearPicked}
+                className="flex min-h-12 items-center gap-1.5 rounded-xl px-3 text-base font-bold text-danger active:bg-red-50"
+              >
+                <TrashIcon className="size-5" />
+                {t.clearPicked}
+              </button>
+            </div>
+            <ul className="space-y-2">{done.map(row)}</ul>
+          </section>
+        )}
       </main>
 
       {/* composer: everything one thumb needs, at the bottom */}
-      <div className="shrink-0 border-t-2 border-ink bg-white px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <div className="shrink-0 border-t-2 border-ink bg-gray-50 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         {speech.listening && (
-          <p className="mb-2 flex items-center gap-2 text-base font-bold text-danger">
-            <span className="size-3 animate-pulse rounded-full bg-danger" aria-hidden="true" />
+          <p
+            role="status"
+            className="mb-2 flex animate-fade-in items-center gap-2 rounded-xl bg-danger px-3 py-2 text-base font-bold text-white"
+          >
+            <span className="size-3 shrink-0 animate-pulse rounded-full bg-white" aria-hidden="true" />
             {t.listening}
           </p>
         )}
@@ -259,7 +343,9 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
           aria-label={t.composerPlaceholder}
           rows={2}
           enterKeyHint="done"
-          className="block max-h-40 w-full resize-none rounded-xl border-2 border-ink px-3 py-2 text-xl leading-snug placeholder:text-gray-500 focus:outline-4 focus:outline-offset-0 focus:outline-brand"
+          className={`block max-h-40 w-full resize-none rounded-xl border-2 bg-white px-3 py-2 text-xl leading-snug placeholder:text-gray-500 focus:outline-4 focus:outline-offset-0 focus:outline-brand ${
+            speech.listening ? 'border-danger' : 'border-ink'
+          }`}
           style={{ fieldSizing: 'content' } as CSSProperties}
         />
         <div className="mt-3 flex gap-3">
@@ -293,34 +379,36 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
       </div>
 
       <ItemSheet editing={editing} onClose={() => setEditing(null)} onSave={saveItem} onDelete={remove} />
-      <SendSheet
-        open={sendOpen}
-        onClose={() => setSendOpen(false)}
-        message={message}
-        title={job?.name ?? ''}
-        onCopied={() => toast.show(t.copied)}
-      />
+      {job && profile && (
+        <SendSheet
+          open={sendOpen}
+          onClose={() => setSendOpen(false)}
+          job={job}
+          profile={profile}
+          items={items}
+          onCopied={() => toast.show(t.copied)}
+        />
+      )}
+      {job && (
+        <JobSheet
+          open={jobOpen}
+          job={job}
+          itemCount={items.length}
+          onClose={() => setJobOpen(false)}
+          onSave={(name, address) => {
+            const updated = updateJob(uid, job.id, { name, address })
+            if (updated) setJob(updated)
+            setJobOpen(false)
+          }}
+          onDelete={() => {
+            deleteJob(uid, job.id)
+            navigate('/', { replace: true })
+          }}
+        />
+      )}
       {toast.node}
     </div>
   )
-}
-
-/** Shows the "saved on phone" bar only when there are unsent changes and no signal. */
-function useOfflinePending(uid: string): boolean {
-  const check = useCallback(() => !navigator.onLine && pendingCount(uid) > 0, [uid])
-  const [value, setValue] = useState(check)
-  useEffect(() => {
-    const update = () => setValue(check())
-    const off = onSyncChange(update)
-    window.addEventListener('online', update)
-    window.addEventListener('offline', update)
-    return () => {
-      off()
-      window.removeEventListener('online', update)
-      window.removeEventListener('offline', update)
-    }
-  }, [check])
-  return value
 }
 
 // ---------------------------------------------------------------------------
@@ -331,11 +419,13 @@ const SWIPE_DELETE_PX = 110
 
 function ItemRow({
   m,
+  fresh,
   onToggle,
   onEdit,
   onDelete,
 }: {
   m: Material
+  fresh: boolean
   onToggle: () => void
   onEdit: () => void
   onDelete: () => void
@@ -379,13 +469,15 @@ function ItemRow({
   }
 
   const qty = formatQty(m.qty)
+  const done = m.picked_up
+  const doneText = done ? 'text-gray-600 line-through decoration-2' : ''
   return (
-    <li className="relative overflow-hidden rounded-2xl border-2 border-ink bg-danger">
+    <li className={`relative overflow-hidden rounded-2xl border-2 bg-danger ${done ? 'border-gray-300' : 'border-ink'}`}>
       <div className="absolute inset-y-0 right-0 flex items-center pr-5 text-white" aria-hidden="true">
         <TrashIcon className="size-7" />
       </div>
       <div
-        className="relative flex items-stretch bg-white"
+        className={`relative flex items-stretch ${done ? 'bg-gray-100' : 'bg-white'} ${fresh ? 'animate-flash' : ''}`}
         style={{ transform: `translateX(${dx}px)`, transition: dragging ? 'none' : 'transform 150ms ease-out', touchAction: 'pan-y' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -405,7 +497,7 @@ function ItemRow({
           aria-checked={m.picked_up}
           aria-label={m.picked_up ? t.pickedUp : t.notPickedUp}
           onClick={onToggle}
-          className="flex w-16 shrink-0 items-center justify-center"
+          className="flex w-14 shrink-0 items-center justify-center"
         >
           <span
             className={`flex size-9 items-center justify-center rounded-lg border-[3px] border-ink ${m.picked_up ? 'bg-ink text-brand' : 'bg-white'}`}
@@ -413,30 +505,32 @@ function ItemRow({
             {m.picked_up && <CheckIcon className="size-6" />}
           </span>
         </button>
+        {/* qty gets its own column so numbers line up when scanning the list at the counter */}
         <button
           type="button"
           onClick={onEdit}
-          className="min-h-16 min-w-0 flex-1 py-3 pr-1 text-left text-xl leading-snug break-words"
+          className="flex min-h-16 min-w-0 flex-1 items-center py-3 pr-1 text-left text-xl leading-snug"
         >
-          <span className={m.picked_up ? 'text-muted line-through' : ''}>
-            {qty && <span className="font-black">{qty}</span>}
-            {qty && <span className="text-muted"> · </span>}
-            {m.unit && (
-              <>
-                <span className="font-semibold">{m.unit}</span>
-                <span className="text-muted"> · </span>
-              </>
-            )}
-            <span>{m.item}</span>
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className={`min-w-8 shrink-0 font-black whitespace-nowrap tabular-nums ${doneText}`}>{qty}</span>
+            <span className={`min-w-0 break-words ${doneText}`}>
+              {m.unit && (
+                <>
+                  <span className="font-bold">{m.unit}</span>
+                  <span className="text-muted"> · </span>
+                </>
+              )}
+              {m.item}
+            </span>
           </span>
         </button>
         <button
           type="button"
           onClick={onDelete}
           aria-label={`${t.delete}: ${m.item}`}
-          className="flex w-14 shrink-0 items-center justify-center text-muted active:text-danger"
+          className="flex w-12 shrink-0 items-center justify-center text-gray-500 active:text-danger"
         >
-          <XIcon className="size-7" />
+          <XIcon className="size-6" />
         </button>
       </div>
     </li>
@@ -490,6 +584,7 @@ function ItemForm({
   const [qty, setQty] = useState(existing ? formatQty(existing.qty) : '')
   const [unit, setUnit] = useState(existing?.unit ?? '')
   const [item, setItem] = useState(existing?.item ?? '')
+  const qtyId = useId()
 
   function submit(e: FormEvent) {
     e.preventDefault()
@@ -497,20 +592,71 @@ function ItemForm({
     onSave({ qty: parseQtyInput(qty), unit: unit.trim() || null, item: item.trim() })
   }
 
+  /** − / + so nobody has to type a number with gloves on. Going below 1 clears it. */
+  function step(by: number) {
+    const next = Math.max(0, (parseQtyInput(qty) ?? 0) + by)
+    setQty(next === 0 ? '' : formatQty(next))
+  }
+
+  const one = parseQtyInput(qty) === 1
+  const unitNow = unit.trim().toLowerCase()
+  const stepButton =
+    'flex min-h-14 items-center justify-center rounded-xl border-2 border-ink bg-white active:bg-gray-100'
+
   return (
     <form onSubmit={submit} className="space-y-4">
-      <div className="grid grid-cols-[6rem_1fr] gap-3">
-        <TextField
-          label={t.qty}
-          inputMode="decimal"
-          placeholder="12"
-          value={qty}
-          onChange={(e) => setQty(e.target.value)}
-          autoFocus={!existing}
-        />
-        <TextField label={t.unit} placeholder={t.unitPlaceholder} value={unit} onChange={(e) => setUnit(e.target.value)} />
+      <div>
+        <label htmlFor={qtyId} className="mb-1 block text-base font-bold">
+          {t.qty}
+        </label>
+        <div className="grid grid-cols-[4rem_1fr_4rem] gap-2">
+          <button type="button" aria-label={t.less} onClick={() => step(-1)} className={stepButton}>
+            <MinusIcon className="size-7" />
+          </button>
+          <input
+            id={qtyId}
+            inputMode="decimal"
+            placeholder="12"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            className="block min-h-14 w-full rounded-xl border-2 border-ink bg-white px-2 text-center text-2xl font-black text-ink placeholder:font-normal placeholder:text-gray-400 focus:outline-4 focus:outline-offset-0 focus:outline-brand"
+          />
+          <button type="button" aria-label={t.more} onClick={() => step(1)} className={stepButton}>
+            <PlusIcon className="size-7" />
+          </button>
+        </div>
       </div>
-      <TextField label={t.item} placeholder={t.itemPlaceholder} value={item} onChange={(e) => setItem(e.target.value)} />
+
+      <div>
+        <TextField label={t.unit} placeholder={t.unitPlaceholder} value={unit} onChange={(e) => setUnit(e.target.value)} />
+        {/* common units: one tap instead of typing. Scrolls sideways. */}
+        <div className="-mx-4 mt-2 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
+          {t.units.map(([single, many]) => {
+            const on = unitNow === single || unitNow === many
+            return (
+              <button
+                key={many}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setUnit(on ? '' : one ? single : many)}
+                className={`min-h-12 shrink-0 rounded-full border-2 border-ink px-4 text-base font-bold ${
+                  on ? 'bg-ink text-white' : 'bg-white text-ink active:bg-gray-100'
+                }`}
+              >
+                {many}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <TextField
+        label={t.item}
+        placeholder={t.itemPlaceholder}
+        value={item}
+        onChange={(e) => setItem(e.target.value)}
+        autoFocus={!existing}
+      />
       <Button type="submit" className="w-full" disabled={!item.trim()}>
         {t.save}
       </Button>
@@ -550,24 +696,74 @@ async function copyText(text: string): Promise<boolean> {
 function SendSheet({
   open,
   onClose,
-  message,
-  title,
-  onCopied,
+  ...props
 }: {
   open: boolean
   onClose: () => void
-  message: string
-  title: string
+  job: Job
+  profile: Profile
+  items: Material[]
   onCopied: () => void
 }) {
   const { t } = useApp()
+  return (
+    <Sheet open={open} title={t.sendList} onClose={onClose}>
+      <SendBody {...props} onClose={onClose} />
+    </Sheet>
+  )
+}
+
+/** Mounted fresh each time the sheet opens. */
+function SendBody({
+  job,
+  profile,
+  items,
+  onClose,
+  onCopied,
+}: {
+  job: Job
+  profile: Profile
+  items: Material[]
+  onClose: () => void
+  onCopied: () => void
+}) {
+  const { t } = useApp()
+  const needed = items.filter((m) => !m.picked_up)
+  // Only ask when some things are picked up and some aren't.
+  const mixed = needed.length > 0 && needed.length < items.length
+  const [which, setWhich] = useState<'needed' | 'all'>('needed')
+  const message = buildMessage(job, profile, mixed && which === 'needed' ? needed : items, t)
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 
   return (
-    <Sheet open={open} title={t.sendList} onClose={onClose}>
-      <pre className="mb-4 max-h-[38dvh] overflow-y-auto rounded-xl border-2 border-gray-300 bg-gray-50 p-3 font-sans text-base whitespace-pre-wrap">
+    <>
+      {mixed && (
+        <fieldset className="mb-4">
+          <legend className="mb-1 text-base font-bold">{t.sendWhich}</legend>
+          <div className="grid grid-cols-2 gap-2">
+            {(['needed', 'all'] as const).map((w) => (
+              <button
+                key={w}
+                type="button"
+                aria-pressed={which === w}
+                onClick={() => setWhich(w)}
+                className={`min-h-14 rounded-xl border-2 border-ink px-2 text-base leading-tight font-bold ${
+                  which === w ? 'bg-ink text-white' : 'bg-white text-ink active:bg-gray-100'
+                }`}
+              >
+                {w === 'needed' ? t.sendNeeded(needed.length) : t.sendAll(items.length)}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
+      <p className="mb-1 text-base font-bold">{t.preview}</p>
+      {/* Looks like the text bubble they'll get */}
+      <div className="mb-4 max-h-[34dvh] overflow-y-auto rounded-3xl rounded-bl-md bg-gray-200 px-4 py-3 text-base leading-snug break-words whitespace-pre-wrap">
         {message}
-      </pre>
+      </div>
+
       <div className="space-y-3">
         <a
           href={`sms:?&body=${encodeURIComponent(message)}`}
@@ -577,34 +773,125 @@ function SendSheet({
           <MessageIcon className="size-7" />
           {t.textMessage}
         </a>
-        {canShare && (
+        <div className={`grid gap-3 ${canShare ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          {canShare && (
+            <Button
+              variant="outline"
+              className="min-h-16 w-full text-xl"
+              onClick={() => {
+                navigator.share({ title: job.name, text: message }).then(onClose, () => {
+                  /* user closed the share sheet */
+                })
+              }}
+            >
+              <ShareIcon className="size-7" />
+              {t.share}
+            </Button>
+          )}
           <Button
             variant="outline"
             className="min-h-16 w-full text-xl"
-            onClick={() => {
-              navigator.share({ title, text: message }).then(onClose, () => {
-                /* user closed the share sheet */
-              })
+            onClick={async () => {
+              if (await copyText(message)) {
+                onClose()
+                onCopied()
+              }
             }}
           >
-            <ShareIcon className="size-7" />
-            {t.share}
+            <CopyIcon className="size-7" />
+            {t.copy}
           </Button>
-        )}
-        <Button
-          variant="outline"
-          className="min-h-16 w-full text-xl"
-          onClick={async () => {
-            if (await copyText(message)) {
-              onClose()
-              onCopied()
-            }
-          }}
-        >
-          <CopyIcon className="size-7" />
-          {t.copy}
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Edit / delete the job
+// ---------------------------------------------------------------------------
+
+function JobSheet({
+  open,
+  onClose,
+  ...props
+}: {
+  open: boolean
+  onClose: () => void
+  job: Job
+  itemCount: number
+  onSave: (name: string, address: string | null) => void
+  onDelete: () => void
+}) {
+  const { t } = useApp()
+  return (
+    <Sheet open={open} title={t.editJob} onClose={onClose}>
+      <JobForm {...props} />
+    </Sheet>
+  )
+}
+
+function JobForm({
+  job,
+  itemCount,
+  onSave,
+  onDelete,
+}: {
+  job: Job
+  itemCount: number
+  onSave: (name: string, address: string | null) => void
+  onDelete: () => void
+}) {
+  const { t } = useApp()
+  const [name, setName] = useState(job.name)
+  const [address, setAddress] = useState(job.address ?? '')
+  const [confirming, setConfirming] = useState(false)
+
+  if (confirming) {
+    return (
+      <div className="space-y-4">
+        <p className="text-xl leading-snug font-semibold">{t.deleteJobConfirm(job.name, itemCount)}</p>
+        <Button variant="dangerSolid" className="w-full" onClick={onDelete}>
+          <TrashIcon />
+          {t.deleteJob}
+        </Button>
+        <Button variant="outline" className="w-full" onClick={() => setConfirming(false)}>
+          {t.cancel}
         </Button>
       </div>
-    </Sheet>
+    )
+  }
+
+  function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!name.trim()) return
+    onSave(name.trim(), address.trim() || null)
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <TextField
+        label={t.jobName}
+        autoCapitalize="words"
+        enterKeyHint="next"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <TextField
+        label={t.address}
+        placeholder={t.addressPlaceholder}
+        autoComplete="street-address"
+        enterKeyHint="done"
+        value={address}
+        onChange={(e) => setAddress(e.target.value)}
+      />
+      <Button type="submit" className="w-full" disabled={!name.trim()}>
+        {t.save}
+      </Button>
+      <Button variant="danger" className="w-full" onClick={() => setConfirming(true)}>
+        <TrashIcon />
+        {t.deleteJob}
+      </Button>
+    </form>
   )
 }

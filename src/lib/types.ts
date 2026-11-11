@@ -16,7 +16,9 @@ export interface Job {
   address: string | null
   created_at: string
   updated_at: string
+  /** Client-only: counted from the job's materials, never sent to the server. */
   item_count: number
+  picked_count: number
 }
 
 export interface Material {

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useApp } from '../AppContext'
-import { Button, LangToggle, TextField } from '../components/ui'
+import { Button, CheckIcon, LangToggle, MessageIcon, MicIcon, TextField } from '../components/ui'
 import { formatPhoneInput, prettyPhone, toE164 } from '../lib/phone'
 import { DEMO } from '../lib/supabase'
 import type { Lang } from '../lib/types'
@@ -8,24 +8,72 @@ import type { Lang } from '../lib/types'
 /** Screen 1: phone → code → (first time) name + business + language. */
 export function Login() {
   const { status } = useApp()
+  if (status !== 'needsSetup') return <PhoneAndCode />
   return (
-    <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-      <div className="flex justify-end">
-        <LangToggle />
+    <Page header={<SmallBrand />}>
+      <Setup />
+    </Page>
+  )
+}
+
+function Page({ header, children }: { header: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex min-h-dvh flex-col">
+      {header}
+      <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+        {children}
       </div>
-      {status === 'needsSetup' ? <Setup /> : <PhoneAndCode />}
     </div>
   )
 }
 
-function Brand() {
+/** Black header with the logo, what the app does, and the 3 steps. */
+function Hero() {
+  const { t } = useApp()
+  const steps = [
+    { Icon: MicIcon, label: t.stepTalk },
+    { Icon: CheckIcon, label: t.stepCheck },
+    { Icon: MessageIcon, label: t.stepSend },
+  ]
+  return (
+    <header className="rounded-b-3xl bg-ink text-white">
+      <div className="mx-auto max-w-md px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-7">
+        <div className="flex justify-end">
+          <LangToggle onDark />
+        </div>
+        <div className="flex flex-col items-center text-center">
+          <img src="/favicon.svg" alt="" className="size-20" />
+          <h1 className="mt-4 text-4xl font-black tracking-tight break-words">{t.appName}</h1>
+          <p className="mt-2 max-w-xs text-lg text-gray-200">{t.tagline}</p>
+          <ol className="mt-6 grid w-full grid-cols-3 gap-2 [@media(max-height:640px)]:hidden">
+            {steps.map(({ Icon, label }, i) => (
+              <li key={label} className="flex flex-col items-center gap-2">
+                <span className="flex size-12 items-center justify-center rounded-full bg-brand text-ink">
+                  <Icon className="size-6" />
+                </span>
+                <span className="text-base font-bold">
+                  {i + 1}. {label}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </div>
+    </header>
+  )
+}
+
+/** Slim header, so the code and setup forms fit above the keyboard. */
+function SmallBrand({ langToggle = false }: { langToggle?: boolean }) {
   const { t } = useApp()
   return (
-    <div className="flex flex-1 flex-col items-center justify-center py-8 text-center">
-      <img src="/favicon.svg" alt="" className="mb-4 size-20" />
-      <h1 className="text-4xl font-black tracking-tight">{t.appName}</h1>
-      <p className="mt-3 max-w-xs text-lg text-muted">{t.tagline}</p>
-    </div>
+    <header className="bg-ink text-white">
+      <div className="mx-auto flex max-w-md items-center gap-3 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
+        <img src="/favicon.svg" alt="" className="size-10" />
+        <span className="min-w-0 flex-1 truncate text-xl font-black">{t.appName}</span>
+        {langToggle && <LangToggle onDark />}
+      </div>
+    </header>
   )
 }
 
@@ -63,11 +111,13 @@ function PhoneAndCode() {
   }
 
   return (
-    <>
-      <Brand />
+    <Page header={step === 'phone' ? <Hero /> : <SmallBrand langToggle />}>
       {DEMO && (
-        <p className="mb-4 rounded-xl border-2 border-ink bg-brand/30 p-3 text-base font-semibold">{t.demoBanner}</p>
+        <p className="mb-4 rounded-xl border-2 border-dashed border-ink bg-brand/25 px-3 py-2 text-base font-semibold">
+          {t.demoBanner}
+        </p>
       )}
+      {step === 'phone' && <div className="flex-1" />}
 
       {step === 'phone' ? (
         <form onSubmit={submitPhone} className="space-y-4">
@@ -97,7 +147,7 @@ function PhoneAndCode() {
           }}
           className="space-y-4"
         >
-          <p className="text-lg">{t.codeSentTo(prettyPhone(phone))}</p>
+          <p className="text-lg">{t.codeSentTo(prettyPhone(phone).replaceAll('-', '\u2011'))}</p>
           <TextField
             label={t.codeLabel}
             type="text"
@@ -137,7 +187,7 @@ function PhoneAndCode() {
           </div>
         </form>
       )}
-    </>
+    </Page>
   )
 }
 
@@ -160,7 +210,7 @@ function Setup() {
 
   return (
     <form onSubmit={submit} className="flex flex-1 flex-col">
-      <div className="py-8">
+      <div className="pb-6">
         <h1 className="text-4xl font-black">{t.setupTitle}</h1>
         <p className="mt-2 text-lg text-muted">{t.setupHint}</p>
       </div>

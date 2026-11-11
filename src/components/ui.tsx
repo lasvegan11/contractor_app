@@ -5,7 +5,7 @@ import { useApp } from '../AppContext'
 // Buttons
 // ---------------------------------------------------------------------------
 
-type Variant = 'primary' | 'dark' | 'outline' | 'ghost' | 'danger'
+type Variant = 'primary' | 'dark' | 'outline' | 'ghost' | 'danger' | 'dangerSolid'
 
 const VARIANTS: Record<Variant, string> = {
   primary: 'bg-brand text-ink border-2 border-ink active:bg-brand-dark',
@@ -13,6 +13,7 @@ const VARIANTS: Record<Variant, string> = {
   outline: 'bg-white text-ink border-2 border-ink active:bg-gray-100',
   ghost: 'bg-transparent text-ink border-2 border-transparent active:bg-gray-100',
   danger: 'bg-white text-danger border-2 border-danger active:bg-red-50',
+  dangerSolid: 'bg-danger text-white border-2 border-danger active:bg-red-800',
 }
 
 export function Button({
@@ -25,7 +26,7 @@ export function Button({
     <button
       type="button"
       {...props}
-      className={`inline-flex min-h-14 items-center justify-center gap-2 rounded-2xl px-5 text-lg font-bold transition-transform select-none active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100 ${VARIANTS[variant]} ${className}`}
+      className={`inline-flex min-h-14 items-center justify-center gap-2 rounded-2xl px-5 text-lg font-bold transition-transform select-none active:scale-[0.98] disabled:border-gray-300 disabled:bg-gray-100 disabled:text-gray-600 disabled:active:scale-100 ${VARIANTS[variant]} ${className}`}
     >
       {children}
     </button>
@@ -60,21 +61,61 @@ export function TextField({
 // Language toggle
 // ---------------------------------------------------------------------------
 
-export function LangToggle() {
+/** EN | ES switch. `onDark` for use on the black header. */
+export function LangToggle({ onDark = false }: { onDark?: boolean }) {
   const { lang, setLang } = useApp()
+  const on = onDark ? 'bg-brand text-ink' : 'bg-ink text-white'
+  const off = onDark ? 'text-white' : 'text-ink'
   return (
-    <div role="group" aria-label="Language / Idioma" className="flex rounded-xl border-2 border-ink p-0.5">
+    <div
+      role="group"
+      aria-label="Language / Idioma"
+      className={`flex rounded-xl border-2 p-0.5 ${onDark ? 'border-white' : 'border-ink'}`}
+    >
       {(['en', 'es'] as const).map((l) => (
         <button
           key={l}
           type="button"
           aria-pressed={lang === l}
           onClick={() => setLang(l)}
-          className={`min-h-11 min-w-12 rounded-lg px-3 text-base font-black ${lang === l ? 'bg-ink text-white' : 'text-ink'}`}
+          className={`min-h-11 min-w-12 rounded-lg px-3 text-base font-black ${lang === l ? on : off}`}
         >
           {l === 'en' ? 'EN' : 'ES'}
         </button>
       ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Progress bar (picked up / total)
+// ---------------------------------------------------------------------------
+
+export function Progress({
+  value,
+  max,
+  label,
+  className = '',
+}: {
+  value: number
+  max: number
+  label?: string
+  className?: string
+}) {
+  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0
+  return (
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={max}
+      aria-valuenow={value}
+      className={`h-2.5 overflow-hidden rounded-full bg-gray-200 ${className}`}
+    >
+      <div
+        className={`h-full rounded-full transition-[width] duration-300 ${pct === 100 ? 'bg-ok' : 'bg-ink'}`}
+        style={{ width: `${pct}%` }}
+      />
     </div>
   )
 }
@@ -110,12 +151,12 @@ export function Sheet({
   if (!open) return null
   return (
     <div className="fixed inset-0 z-40 flex flex-col justify-end">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-0 animate-fade-in bg-black/60" onClick={onClose} aria-hidden="true" />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative max-h-[92dvh] overflow-y-auto rounded-t-3xl bg-white px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl"
+        className="relative mx-auto max-h-[92dvh] w-full max-w-xl animate-sheet-up overflow-y-auto rounded-t-3xl bg-white px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl"
       >
         <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-gray-300" aria-hidden="true" />
         <div className="mb-3 flex items-center justify-between gap-2">
@@ -164,7 +205,10 @@ export function useToast(bottomClass = 'bottom-[calc(7rem+env(safe-area-inset-bo
       aria-live="polite"
       className={`pointer-events-none fixed inset-x-0 z-50 flex justify-center px-4 ${bottomClass}`}
     >
-      <div className="pointer-events-auto flex max-w-md items-center gap-3 rounded-2xl bg-ink px-4 py-3 text-base font-semibold text-white shadow-xl">
+      <div
+        key={toast.id}
+        className="pointer-events-auto flex max-w-md animate-toast-in items-center gap-3 rounded-2xl bg-ink px-4 py-3 text-base font-semibold text-white shadow-xl"
+      >
         <span>{toast.message}</span>
         {toast.action && (
           <button
@@ -267,5 +311,46 @@ export const TrashIcon = ({ className }: IconProps) => (
 export const CloudOffIcon = ({ className }: IconProps) => (
   <svg {...icon(className)}>
     <path d="M3 3l18 18M8.5 8.6A5 5 0 0 0 6.5 18h11m3-2.2A4 4 0 0 0 17 10h-.5A6 6 0 0 0 11 6c-.7 0-1.4.1-2 .4" />
+  </svg>
+)
+export const MoreIcon = ({ className }: IconProps) => (
+  <svg {...icon(className)}>
+    <circle cx="5" cy="12" r="1.75" fill="currentColor" />
+    <circle cx="12" cy="12" r="1.75" fill="currentColor" />
+    <circle cx="19" cy="12" r="1.75" fill="currentColor" />
+  </svg>
+)
+export const ChevronRightIcon = ({ className }: IconProps) => (
+  <svg {...icon(className)} strokeWidth={3}>
+    <path d="m9 18 6-6-6-6" />
+  </svg>
+)
+export const PinIcon = ({ className }: IconProps) => (
+  <svg {...icon(className)}>
+    <path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21Z" />
+    <circle cx="12" cy="9.5" r="2.5" />
+  </svg>
+)
+export const ListIcon = ({ className }: IconProps) => (
+  <svg {...icon(className)}>
+    <path d="M9 6h11M9 12h11M9 18h11" />
+    <path d="m3.5 6 1 1 2-2M3.5 12l1 1 2-2" strokeWidth={2} />
+    <circle cx="5" cy="18" r="1" fill="currentColor" />
+  </svg>
+)
+export const ClipboardIcon = ({ className }: IconProps) => (
+  <svg {...icon(className)}>
+    <rect x="5" y="4" width="14" height="17" rx="2" />
+    <path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3" />
+  </svg>
+)
+export const MinusIcon = ({ className }: IconProps) => (
+  <svg {...icon(className)} strokeWidth={3}>
+    <path d="M5 12h14" />
+  </svg>
+)
+export const DownloadIcon = ({ className }: IconProps) => (
+  <svg {...icon(className)}>
+    <path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M5 20h14" />
   </svg>
 )

@@ -6,10 +6,11 @@
 // IDs are made on the phone, so items created offline keep the same ID when synced.
 
 import { DEMO, sb } from './supabase'
-import { readJSON, writeJSON } from './storage'
+import { readJSON, removeKey, writeJSON } from './storage'
 import type { Job, Material } from './types'
 
-type JobOp = { v: string; row: Job }
+// `op` is missing on upserts queued before deletes existed, so treat "no op" as upsert.
+type JobOp = { v: string; op?: 'upsert'; row: Job } | { v: string; op: 'delete'; id: string }
 type MatOp =
   | { v: string; op: 'upsert'; row: Material }
   | { v: string; op: 'delete'; id: string; job_id: string }
@@ -58,7 +59,7 @@ const sortMats = (mats: Material[]) =>
   [...mats].sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at))
 
 export function cachedJobs(uid: string): Job[] {
-  return readJSON<Job[]>(key(uid, 'jobs'), [])
+  return readJSON<Job[]>(key(uid, 'jobs'), []).map((j) => ({ ...j, picked_count: j.picked_count ?? 0 }))
 }
 function saveJobs(uid: string, jobs: Job[]) {
   writeJSON(key(uid, 'jobs'), sortJobs(jobs))
@@ -78,13 +79,18 @@ export function saveDraft(uid: string, jobId: string, text: string) {
   writeJSON(key(uid, `draft:${jobId}`), text)
 }
 
-/** Keep the job card's item count and "last updated" right without waiting for the server. */
-function touchJobLocal(uid: string, jobId: string, itemCount: number) {
+const counts = (mats: Array<Pick<Material, 'picked_up'>>) => ({
+  item_count: mats.length,
+  picked_count: mats.filter((m) => m.picked_up).length,
+})
+
+/** Keep the job card's counts and "last updated" right without waiting for the server. */
+function touchJobLocal(uid: string, jobId: string, mats: Material[]) {
   const jobs = cachedJobs(uid)
   const now = new Date().toISOString()
   saveJobs(
     uid,
-    jobs.map((j) => (j.id === jobId ? { ...j, item_count: itemCount, updated_at: now } : j)),
+    jobs.map((j) => (j.id === jobId ? { ...j, ...counts(mats), updated_at: now } : j)),
   )
 }
 
@@ -92,8 +98,8 @@ function touchJobLocal(uid: string, jobId: string, itemCount: number) {
 // jobs
 // ---------------------------------------------------------------------------
 
-interface JobRow extends Omit<Job, 'item_count'> {
-  materials: Array<{ count: number }> | null
+interface JobRow extends Omit<Job, 'item_count' | 'picked_count'> {
+  materials: Array<{ picked_up: boolean }> | null
 }
 
 export async function loadJobs(uid: string): Promise<Job[]> {
@@ -102,19 +108,20 @@ export async function loadJobs(uid: string): Promise<Job[]> {
 
   const { data, error } = await sb()
     .from('jobs')
-    .select('id, user_id, name, address, created_at, updated_at, materials(count)')
+    .select('id, user_id, name, address, created_at, updated_at, materials(picked_up)')
     .order('updated_at', { ascending: false })
     .returns<JobRow[]>()
   if (error || !data) return sortJobs(local)
 
   const byId = new Map<string, Job>()
-  for (const { materials, ...row } of data) {
-    byId.set(row.id, { ...row, item_count: materials?.[0]?.count ?? 0 })
-  }
+  for (const { materials, ...row } of data) byId.set(row.id, { ...row, ...counts(materials ?? []) })
 
   // Lay unsent changes on top of what the server has.
   const ob = getOutbox(uid)
-  for (const { row } of Object.values(ob.jobs)) byId.set(row.id, { ...byId.get(row.id), ...row })
+  for (const op of Object.values(ob.jobs)) {
+    if (op.op === 'delete') byId.delete(op.id)
+    else byId.set(op.row.id, { ...byId.get(op.row.id), ...op.row })
+  }
   const jobsWithPendingItems = new Set(
     Object.values(ob.mats).map((op) => (op.op === 'upsert' ? op.row.job_id : op.job_id)),
   )
@@ -125,6 +132,7 @@ export async function loadJobs(uid: string): Promise<Job[]> {
       byId.set(id, {
         ...server,
         item_count: mine.item_count,
+        picked_count: mine.picked_count,
         updated_at: mine.updated_at > server.updated_at ? mine.updated_at : server.updated_at,
       })
     }
@@ -136,6 +144,7 @@ export async function loadJobs(uid: string): Promise<Job[]> {
 }
 
 export async function loadJob(uid: string, jobId: string): Promise<Job | null> {
+  if (getOutbox(uid).jobs[jobId]?.op === 'delete') return null
   const local = cachedJobs(uid).find((j) => j.id === jobId)
   if (local || DEMO) return local ?? null
   const { data } = await sb()
@@ -143,7 +152,14 @@ export async function loadJob(uid: string, jobId: string): Promise<Job | null> {
     .select('id, user_id, name, address, created_at, updated_at')
     .eq('id', jobId)
     .maybeSingle()
-  return data ? { ...data, item_count: 0 } : null
+  return data ? { ...data, item_count: 0, picked_count: 0 } : null
+}
+
+function queueJob(uid: string, job: Job) {
+  const ob = getOutbox(uid)
+  ob.jobs[job.id] = { v: version(), row: job }
+  saveOutbox(uid, ob)
+  void flush(uid)
 }
 
 export function createJob(uid: string, name: string, address: string | null): Job {
@@ -156,13 +172,41 @@ export function createJob(uid: string, name: string, address: string | null): Jo
     created_at: now,
     updated_at: now,
     item_count: 0,
+    picked_count: 0,
   }
   saveJobs(uid, [job, ...cachedJobs(uid)])
+  queueJob(uid, job)
+  return job
+}
+
+/** Rename a job or change its address. Returns the updated job, or null if it's gone. */
+export function updateJob(uid: string, jobId: string, patch: Pick<Job, 'name' | 'address'>): Job | null {
+  const current = cachedJobs(uid).find((j) => j.id === jobId)
+  if (!current) return null
+  const job: Job = {
+    ...current,
+    name: patch.name.trim(),
+    address: patch.address?.trim() || null,
+    updated_at: new Date().toISOString(),
+  }
+  saveJobs(uid, cachedJobs(uid).map((j) => (j.id === jobId ? job : j)))
+  queueJob(uid, job)
+  return job
+}
+
+/** Delete a job and its list. The server removes the materials too (on delete cascade). */
+export function deleteJob(uid: string, jobId: string) {
+  saveJobs(uid, cachedJobs(uid).filter((j) => j.id !== jobId))
+  removeKey(key(uid, `mats:${jobId}`))
+  removeKey(key(uid, `draft:${jobId}`))
+
   const ob = getOutbox(uid)
-  ob.jobs[job.id] = { v: version(), row: job }
+  for (const [id, op] of Object.entries(ob.mats)) {
+    if ((op.op === 'upsert' ? op.row.job_id : op.job_id) === jobId) delete ob.mats[id]
+  }
+  ob.jobs[jobId] = { v: version(), op: 'delete', id: jobId }
   saveOutbox(uid, ob)
   void flush(uid)
-  return job
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +215,10 @@ export function createJob(uid: string, name: string, address: string | null): Jo
 
 export async function loadMaterials(uid: string, jobId: string): Promise<Material[]> {
   const local = cachedMaterials(uid, jobId)
-  if (DEMO) return local
+  if (DEMO) {
+    touchJobCount(uid, jobId, local)
+    return local
+  }
 
   const { data, error } = await sb()
     .from('materials')
@@ -189,14 +236,15 @@ export async function loadMaterials(uid: string, jobId: string): Promise<Materia
 
   const mats = sortMats([...byId.values()])
   saveMaterials(uid, jobId, mats)
-  touchJobCount(uid, jobId, mats.length)
+  touchJobCount(uid, jobId, mats)
   return mats
 }
 
-function touchJobCount(uid: string, jobId: string, count: number) {
+function touchJobCount(uid: string, jobId: string, mats: Material[]) {
   const jobs = cachedJobs(uid)
-  if (jobs.some((j) => j.id === jobId && j.item_count !== count)) {
-    saveJobs(uid, jobs.map((j) => (j.id === jobId ? { ...j, item_count: count } : j)))
+  const c = counts(mats)
+  if (jobs.some((j) => j.id === jobId && (j.item_count !== c.item_count || j.picked_count !== c.picked_count))) {
+    saveJobs(uid, jobs.map((j) => (j.id === jobId ? { ...j, ...c } : j)))
   }
 }
 
@@ -212,7 +260,7 @@ export function commitMaterials(
 ): Material[] {
   const sorted = sortMats(next)
   saveMaterials(uid, jobId, sorted)
-  touchJobLocal(uid, jobId, sorted.length)
+  touchJobLocal(uid, jobId, sorted)
 
   const ob = getOutbox(uid)
   for (const row of change.upserts ?? []) ob.mats[row.id] = { v: version(), op: 'upsert', row }
@@ -296,13 +344,18 @@ async function pushOutbox(uid: string): Promise<void> {
   const client = sb()
   let ob = getOutbox(uid)
 
-  // Jobs first, so materials always have a job to point at.
-  const jobOps = Object.values(ob.jobs).map(({ v, row }) => ({ id: row.id, v, row }))
+  // New and edited jobs first, so materials always have a job to point at.
+  const jobUpserts: Array<{ id: string; v: string; row: Job }> = []
+  const jobDeletes: Array<{ id: string; v: string }> = []
+  for (const op of Object.values(ob.jobs)) {
+    if (op.op === 'delete') jobDeletes.push({ id: op.id, v: op.v })
+    else jobUpserts.push({ id: op.row.id, v: op.v, row: op.row })
+  }
   const jobsOk = await sendBatch(
-    jobOps,
+    jobUpserts,
     (batch) =>
       client.from('jobs').upsert(
-        batch.map(({ row: { item_count: _count, ...rest } }) => rest),
+        batch.map(({ row: { item_count: _items, picked_count: _picked, ...rest } }) => rest),
         { onConflict: 'id' },
       ),
     (batch) => settle(uid, batch, 'jobs'),
@@ -324,7 +377,7 @@ async function pushOutbox(uid: string): Promise<void> {
   )
   if (!upsertsOk) return
 
-  await sendBatch(
+  const deletesOk = await sendBatch(
     deletes,
     (batch) =>
       client
@@ -335,5 +388,20 @@ async function pushOutbox(uid: string): Promise<void> {
           batch.map((e) => e.id),
         ),
     (batch) => settle(uid, batch, 'mats'),
+  )
+  if (!deletesOk) return
+
+  // Deleted jobs last. Their materials go with them on the server.
+  await sendBatch(
+    jobDeletes,
+    (batch) =>
+      client
+        .from('jobs')
+        .delete()
+        .in(
+          'id',
+          batch.map((e) => e.id),
+        ),
+    (batch) => settle(uid, batch, 'jobs'),
   )
 }
