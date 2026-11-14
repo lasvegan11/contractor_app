@@ -182,10 +182,10 @@ function JobCard({ job }: { job: Job }) {
         </div>
         {picked > 0 && (
           <div className="mt-3 flex items-center gap-3 text-base font-semibold">
-            <Progress value={picked} max={total} label={t.pickedOf(picked, total)} className="min-w-12 flex-1" />
+            <Progress value={picked} max={total} label={t.gotOf(picked, total)} className="min-w-12 flex-1" />
             <span className={`flex shrink-0 items-center gap-1 ${done ? 'text-ok' : 'text-ink'}`}>
               <CheckIcon className="size-4" />
-              {done ? t.allPickedUp : t.pickedShort(picked, total)}
+              {done ? t.gotAll : t.gotShort(picked, total)}
             </span>
           </div>
         )}

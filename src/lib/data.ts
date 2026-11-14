@@ -64,8 +64,11 @@ export function cachedJobs(uid: string): Job[] {
 function saveJobs(uid: string, jobs: Job[]) {
   writeJSON(key(uid, 'jobs'), sortJobs(jobs))
 }
+/** Rows saved before `official_name` existed don't have the field; every row needs it to sync in one batch. */
+const withDefaults = (m: Material): Material => ({ ...m, official_name: m.official_name ?? null })
+
 export function cachedMaterials(uid: string, jobId: string): Material[] {
-  return readJSON<Material[]>(key(uid, `mats:${jobId}`), [])
+  return readJSON<Material[]>(key(uid, `mats:${jobId}`), []).map(withDefaults)
 }
 function saveMaterials(uid: string, jobId: string, mats: Material[]) {
   writeJSON(key(uid, `mats:${jobId}`), sortMats(mats))
@@ -222,7 +225,7 @@ export async function loadMaterials(uid: string, jobId: string): Promise<Materia
 
   const { data, error } = await sb()
     .from('materials')
-    .select('id, job_id, user_id, qty, unit, item, picked_up, sort_order, created_at')
+    .select('id, job_id, user_id, qty, unit, item, official_name, picked_up, sort_order, created_at')
     .eq('job_id', jobId)
     .returns<Material[]>()
   if (error || !data) return local
@@ -230,7 +233,7 @@ export async function loadMaterials(uid: string, jobId: string): Promise<Materia
   const byId = new Map<string, Material>()
   for (const m of data) byId.set(m.id, { ...m, qty: m.qty === null ? null : Number(m.qty) })
   for (const op of Object.values(getOutbox(uid).mats)) {
-    if (op.op === 'upsert' && op.row.job_id === jobId) byId.set(op.row.id, op.row)
+    if (op.op === 'upsert' && op.row.job_id === jobId) byId.set(op.row.id, withDefaults(op.row))
     if (op.op === 'delete' && op.job_id === jobId) byId.delete(op.id)
   }
 
@@ -372,7 +375,7 @@ async function pushOutbox(uid: string): Promise<void> {
 
   const upsertsOk = await sendBatch(
     upserts,
-    (batch) => client.from('materials').upsert(batch.map((e) => e.row), { onConflict: 'id' }),
+    (batch) => client.from('materials').upsert(batch.map((e) => withDefaults(e.row)), { onConflict: 'id' }),
     (batch) => settle(uid, batch, 'mats'),
   )
   if (!upsertsOk) return

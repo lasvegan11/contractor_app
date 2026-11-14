@@ -43,7 +43,7 @@ import {
   saveDraft,
   updateJob,
 } from '../lib/data'
-import { buildMessage, formatQty, parseQtyInput } from '../lib/format'
+import { buildMessage, formatQty, officialName, parseQtyInput } from '../lib/format'
 import { parseMaterials } from '../lib/parse'
 import { useOfflinePending } from '../lib/useOfflinePending'
 import { useSpeech } from '../lib/useSpeech'
@@ -150,6 +150,7 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
       qty: p.qty,
       unit: p.unit,
       item: p.item,
+      official_name: p.official_name,
       picked_up: false,
       sort_order: start + i,
       created_at: now,
@@ -173,7 +174,7 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
     navigator.vibrate?.(10) // small tick on Android; iPhones ignore it
   }
 
-  /** After a supply run: drop everything that's been picked up. */
+  /** After a supply run: drop everything marked "Got it". */
   function clearPicked() {
     const gone = itemsRef.current.filter((m) => m.picked_up)
     if (!gone.length) return
@@ -197,6 +198,7 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
         job_id: jobId,
         user_id: uid,
         ...fields,
+        official_name: null,
         picked_up: false,
         sort_order: nextSortOrder(itemsRef.current),
         created_at: new Date().toISOString(),
@@ -204,7 +206,9 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
       commit((cur) => [...cur, row], { upserts: [row] })
       setFreshIds(new Set([row.id]))
     } else if (editing) {
-      const updated = { ...editing, ...fields }
+      // A renamed item is a different product, so its old standard name no longer applies.
+      const official_name = fields.item === editing.item ? editing.official_name : null
+      const updated = { ...editing, ...fields, official_name }
       commit((cur) => cur.map((x) => (x.id === updated.id ? updated : x)), { upserts: [updated] })
     }
     setEditing(null)
@@ -269,11 +273,11 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
         <div className="shrink-0 border-b-2 border-gray-200 bg-gray-50 px-4 pt-2 pb-3">
           <div className="flex items-baseline justify-between gap-3 text-base font-bold">
             <span className={needed.length === 0 ? 'text-ok' : ''}>
-              {needed.length === 0 ? t.allPickedUp : t.stillNeeded(needed.length)}
+              {needed.length === 0 ? t.gotAll : t.stillNeeded(needed.length)}
             </span>
-            <span className="text-muted">{t.pickedOf(done.length, items.length)}</span>
+            <span className="text-muted">{t.gotOf(done.length, items.length)}</span>
           </div>
-          <Progress value={done.length} max={items.length} label={t.pickedOf(done.length, items.length)} className="mt-2" />
+          <Progress value={done.length} max={items.length} label={t.gotOf(done.length, items.length)} className="mt-2" />
         </div>
       )}
 
@@ -304,11 +308,11 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
           {t.addItem}
         </button>
         {done.length > 0 && (
-          <section className="mt-6" aria-label={t.pickedUpSection}>
+          <section className="mt-6" aria-label={t.gotItem}>
             <div className="mb-1 flex items-center justify-between gap-2 pl-1">
               <h2 className="flex items-center gap-2 text-base font-black tracking-wide text-muted uppercase">
                 <CheckIcon className="size-5" />
-                {t.pickedUpSection} · {done.length}
+                {t.gotItem} · {done.length}
               </h2>
               <button
                 type="button"
@@ -316,7 +320,7 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
                 className="flex min-h-12 items-center gap-1.5 rounded-xl px-3 text-base font-bold text-danger active:bg-red-50"
               >
                 <TrashIcon className="size-5" />
-                {t.clearPicked}
+                {t.clearGot}
               </button>
             </div>
             <ul className="space-y-2">{done.map(row)}</ul>
@@ -469,6 +473,7 @@ function ItemRow({
   }
 
   const qty = formatQty(m.qty)
+  const official = officialName(m)
   const done = m.picked_up
   const doneText = done ? 'text-gray-600 line-through decoration-2' : ''
   return (
@@ -495,7 +500,7 @@ function ItemRow({
           type="button"
           role="checkbox"
           aria-checked={m.picked_up}
-          aria-label={m.picked_up ? t.pickedUp : t.notPickedUp}
+          aria-label={`${t.gotItem}: ${m.item}`}
           onClick={onToggle}
           className="flex w-14 shrink-0 items-center justify-center"
         >
@@ -513,14 +518,18 @@ function ItemRow({
         >
           <span className="flex min-w-0 items-baseline gap-2">
             <span className={`min-w-8 shrink-0 font-black whitespace-nowrap tabular-nums ${doneText}`}>{qty}</span>
-            <span className={`min-w-0 break-words ${doneText}`}>
-              {m.unit && (
-                <>
-                  <span className="font-bold">{m.unit}</span>
-                  <span className="text-muted"> · </span>
-                </>
-              )}
-              {m.item}
+            <span className="min-w-0">
+              <span className={`block break-words ${doneText}`}>
+                {m.unit && (
+                  <>
+                    <span className="font-bold">{m.unit}</span>
+                    <span className="text-muted"> · </span>
+                  </>
+                )}
+                {m.item}
+              </span>
+              {/* what the counter calls it, when the list says "mud" or "Romex" */}
+              {official && <span className="block text-base break-words text-muted">{official}</span>}
             </span>
           </span>
         </button>
@@ -729,7 +738,7 @@ function SendBody({
 }) {
   const { t } = useApp()
   const needed = items.filter((m) => !m.picked_up)
-  // Only ask when some things are picked up and some aren't.
+  // Only ask when some things are marked "Got it" and some aren't.
   const mixed = needed.length > 0 && needed.length < items.length
   const [which, setWhich] = useState<'needed' | 'all'>('needed')
   const message = buildMessage(job, profile, mixed && which === 'needed' ? needed : items, t)

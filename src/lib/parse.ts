@@ -1,4 +1,4 @@
-import { fallbackParse } from '../../supabase/functions/_shared/fallback.ts'
+import { cleanOfficialName, fallbackParse } from '../../supabase/functions/_shared/fallback.ts'
 import { DEMO, sb } from './supabase'
 import type { Lang, ParsedItem } from './types'
 
@@ -17,6 +17,7 @@ function clean(data: unknown): ParsedItem[] {
         item,
         qty: typeof r.qty === 'number' && Number.isFinite(r.qty) ? r.qty : null,
         unit: typeof r.unit === 'string' && r.unit.trim() ? r.unit.trim() : null,
+        official_name: cleanOfficialName(item, r.official_name),
       },
     ]
   })

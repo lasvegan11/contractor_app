@@ -46,11 +46,30 @@ supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
 supabase functions deploy parse-materials
 ```
 
-Only a logged-in app user can call the function; the public app key on its own gets a 401 (so strangers can't spend your Claude credit). The function uses `claude-opus-5-5` at low effort, with server-side refusal fallback turned on. It gives Claude **5 seconds**; if Claude is slow, errors, or declines, it splits the text with plain rules instead, so the user is never blocked. Measured on 2026-11-10 from the deployed function: about 2.5s for a typical list, 3–3.6s for a 12-item list, 4.5s on the first call after it has been idle; 13 of 13 calls came back from Claude. If the function logs show `using fallback` often, switch to a faster model:
+Only a logged-in app user can call the function; the public app key on its own gets a 401 (so strangers can't spend your Claude credit). It gives Claude **5 seconds**; if Claude is slow, errors, or declines, it splits the text with plain rules instead, so the user is never blocked.
+
+The model is `claude-haiku-5-5` at low effort unless the `ANTHROPIC_MODEL` secret says otherwise. To change it, no code change or redeploy is needed:
 
 ```bash
-supabase secrets set CLAUDE_MODEL=claude-haiku-5-5
+supabase secrets set ANTHROPIC_MODEL=claude-opus-5-5
 ```
+
+```bash
+supabase secrets unset ANTHROPIC_MODEL
+```
+
+Measured on 2026-11-13 from the deployed function, on 61 test lists (misheard accents, English and Spanish mixed, nicknames, and 15 mishearings that appear nowhere in the function's instructions), same instructions for every model:
+
+| Model | Lists right | Typical wait | Slowest | Timed out to the plain splitter |
+|---|---|---|---|---|
+| `claude-haiku-5-5` (default), two runs | 48 and 52 of 61 | 1.2–1.4s | 5.2s | 1 of 122 |
+| `claude-haiku-5-5`, medium effort | 52 of 61 | 2.7s | 5.3s | 3 of 61 |
+| `claude-sonnet-5-5` | 53 of 61 | 1.9s | 3.1s | 0 of 61 |
+| `claude-opus-5-5` | 59 of 61 | 2.0s | 3.5s | 0 of 61 |
+
+Haiku is the cheapest by a wide margin, and the weakest at cleaning up accent mishearings. Scores move a few points between runs (Haiku was run twice, the others once). Opus and Sonnet also send `fallbacks: "default"` (server-side refusal fallback); Haiku has none, so a refusal there drops to the plain splitter.
+
+**Nicknames.** For slang, nicknames and brand names ("mud", "Romex", "greenboard", "tablaroca") the function also returns `official_name`, the standard English product name ("joint compound"). It is saved in `materials.official_name`, shown in gray under the item, and sent in brackets: `2 buckets mud (joint compound)`. Items added by hand or by the plain splitter have none, and renaming an item clears it.
 
 ### 4. App keys
 
@@ -84,7 +103,7 @@ On the phone: open the site → Share → **Add to Home Screen** (iPhone), or me
 
 **Offline / bad signal.** Every change is saved on the phone first and queued. The queue syncs when signal comes back (on reconnect, on app focus, and every 30s). IDs are made on the phone, so items added offline keep their identity. The unsent text in the box is saved too. If there's no signal when you tap "Add to list", the simple splitter runs on the phone.
 
-**Picked up.** Checking an item off moves it to a "Picked up" section and fills the progress bar on the job and its card. When only some items are checked, the Send sheet asks whether to send what's still needed (the default) or everything. "Clear" on the Picked up section removes those items after a supply run (with Undo).
+**Got it.** Checking an item off ("Got it" / "Ya lo tengo") moves it to a "Got it" section and fills the progress bar on the job and its card. When only some items are checked, the Send sheet asks whether to send what's still needed (the default) or everything. "Clear" on the Got it section removes those items after a supply run (with Undo). The database column is still `picked_up`.
 
 **Editing an item.** Tap an item to change it: − / + for the quantity and one-tap chips for common units (the list is `units` in `src/lib/i18n.ts`, one per language).
 

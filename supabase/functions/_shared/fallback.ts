@@ -8,6 +8,18 @@ export interface ParsedItem {
   qty: number | null
   unit: string | null
   item: string
+  /** Standard product name when the item is slang or a nickname ("mud" → "joint compound"). */
+  official_name: string | null
+}
+
+const plain = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+
+/** Keep the official name only when it says something the item text doesn't already say. */
+export function cleanOfficialName(item: string, official: unknown): string | null {
+  if (typeof official !== 'string') return null
+  const name = official.trim()
+  if (!name) return null
+  return plain(item).includes(plain(name)) ? null : name
 }
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -101,7 +113,7 @@ function parseLine(line: string): ParsedItem | null {
 
   const item = rest.trim()
   if (!item) return null
-  return { qty, unit, item }
+  return { qty, unit, item, official_name: null } // only Claude knows the nicknames
 }
 
 export function fallbackParse(text: string): ParsedItem[] {

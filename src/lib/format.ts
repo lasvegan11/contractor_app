@@ -1,3 +1,4 @@
+import { cleanOfficialName } from '../../supabase/functions/_shared/fallback.ts'
 import type { Strings } from './i18n'
 import { prettyPhone } from './phone'
 import type { Job, Material, Profile } from './types'
@@ -18,9 +19,15 @@ export function formatQty(qty: number | null): string {
   return String(Math.round(qty * 100) / 100)
 }
 
-/** "12 sheets 1/2" drywall" */
-export function itemLine(m: Pick<Material, 'qty' | 'unit' | 'item'>): string {
-  return [formatQty(m.qty), m.unit, m.item].filter(Boolean).join(' ')
+/** The standard product name, only when it adds something to the item text. */
+export function officialName(m: Pick<Material, 'item' | 'official_name'>): string | null {
+  return cleanOfficialName(m.item, m.official_name)
+}
+
+/** "12 sheets 1/2" drywall", or "2 buckets mud (joint compound)" when there's a standard name. */
+export function itemLine(m: Pick<Material, 'qty' | 'unit' | 'item' | 'official_name'>): string {
+  const official = officialName(m)
+  return [formatQty(m.qty), m.unit, m.item, official && `(${official})`].filter(Boolean).join(' ')
 }
 
 /** The text that gets sent. Matches the format in the spec. */

@@ -28,6 +28,9 @@ export interface Material {
   qty: number | null
   unit: string | null
   item: string
+  /** Standard product name when `item` is slang or a nickname; shown under it and sent in brackets. */
+  official_name: string | null
+  /** Shown to the user as "Got it". */
   picked_up: boolean
   sort_order: number
   created_at: string
