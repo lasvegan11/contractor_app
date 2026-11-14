@@ -47,6 +47,7 @@ import { buildMessage, formatQty, officialName, parseQtyInput } from '../lib/for
 import { parseMaterials } from '../lib/parse'
 import { useOfflinePending } from '../lib/useOfflinePending'
 import { useSpeech } from '../lib/useSpeech'
+import { useKeyboardArea } from '../lib/viewport'
 import type { Job, Material, Profile } from '../lib/types'
 
 /** Screen 3: one job's material list — talk/type, edit, check off, send. */
@@ -75,6 +76,7 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
   const [freshIds, setFreshIds] = useState<ReadonlySet<string>>(() => new Set())
   const offline = useOfflinePending(uid)
   const addButtonRef = useRef<HTMLButtonElement>(null)
+  const keyboard = useKeyboardArea()
 
   const setText = useCallback(
     (value: string) => {
@@ -241,7 +243,12 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
   )
 
   return (
-    <div className="mx-auto flex h-dvh max-w-xl flex-col">
+    // While typing on an iPhone, fit the screen to the part above the keyboard so the
+    // Add to list button and the mic stay in view instead of hiding under it.
+    <div
+      className="mx-auto flex h-dvh max-w-xl flex-col"
+      style={keyboard ? { position: 'fixed', top: keyboard.top, height: keyboard.height, left: 0, right: 0 } : undefined}
+    >
       {/* header */}
       <header className="flex shrink-0 items-center gap-1 border-b-2 border-ink bg-white px-1 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2">
         <Link
@@ -329,7 +336,11 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
       </main>
 
       {/* composer: everything one thumb needs, at the bottom */}
-      <div className="shrink-0 border-t-2 border-ink bg-gray-50 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <div
+        className={`shrink-0 border-t-2 border-ink bg-gray-50 px-3 pt-3 ${
+          keyboard ? 'pb-3' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]'
+        }`}
+      >
         {speech.listening && (
           <p
             role="status"
@@ -610,34 +621,52 @@ function ItemForm({
   const one = parseQtyInput(qty) === 1
   const unitNow = unit.trim().toLowerCase()
   const stepButton =
-    'flex min-h-14 items-center justify-center rounded-xl border-2 border-ink bg-white active:bg-gray-100'
+    'flex size-12 items-center justify-center rounded-xl border-2 border-ink bg-white active:bg-gray-100'
 
+  // Item first: it's the one field you must fill, and it's where the cursor starts, so it has to
+  // sit above the keyboard. Qty and unit share a row so the whole form fits above it too.
   return (
-    <form onSubmit={submit} className="space-y-4">
-      <div>
-        <label htmlFor={qtyId} className="mb-1 block text-base font-bold">
-          {t.qty}
-        </label>
-        <div className="grid grid-cols-[4rem_1fr_4rem] gap-2">
-          <button type="button" aria-label={t.less} onClick={() => step(-1)} className={stepButton}>
-            <MinusIcon className="size-7" />
-          </button>
-          <input
-            id={qtyId}
-            inputMode="decimal"
-            placeholder="12"
-            value={qty}
-            onChange={(e) => setQty(e.target.value)}
-            className="block min-h-14 w-full rounded-xl border-2 border-ink bg-white px-2 text-center text-2xl font-black text-ink placeholder:font-normal placeholder:text-gray-400 focus:outline-4 focus:outline-offset-0 focus:outline-brand"
-          />
-          <button type="button" aria-label={t.more} onClick={() => step(1)} className={stepButton}>
-            <PlusIcon className="size-7" />
-          </button>
-        </div>
-      </div>
+    <form onSubmit={submit} className="space-y-3">
+      <TextField
+        label={t.item}
+        placeholder={t.itemPlaceholder}
+        value={item}
+        onChange={(e) => setItem(e.target.value)}
+        enterKeyHint="done"
+        autoFocus={!existing}
+      />
 
       <div>
-        <TextField label={t.unit} placeholder={t.unitPlaceholder} value={unit} onChange={(e) => setUnit(e.target.value)} />
+        <div className="flex items-end gap-3">
+          <div className="shrink-0">
+            <label htmlFor={qtyId} className="mb-1 block text-base font-bold">
+              {t.qty}
+            </label>
+            <div className="flex gap-1">
+              <button type="button" aria-label={t.less} onClick={() => step(-1)} className={stepButton}>
+                <MinusIcon className="size-6" />
+              </button>
+              <input
+                id={qtyId}
+                inputMode="decimal"
+                placeholder="12"
+                value={qty}
+                onChange={(e) => setQty(e.target.value)}
+                className="block min-h-12 w-16 rounded-xl border-2 border-ink bg-white px-1 text-center text-xl font-black text-ink placeholder:font-normal placeholder:text-gray-400 focus:outline-4 focus:outline-offset-0 focus:outline-brand"
+              />
+              <button type="button" aria-label={t.more} onClick={() => step(1)} className={stepButton}>
+                <PlusIcon className="size-6" />
+              </button>
+            </div>
+          </div>
+          <TextField
+            label={t.unit}
+            placeholder={t.unitPlaceholder}
+            value={unit}
+            onChange={(e) => setUnit(e.target.value)}
+            className="min-w-0 flex-1"
+          />
+        </div>
         {/* common units: one tap instead of typing. Scrolls sideways. */}
         <div className="-mx-4 mt-2 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
           {t.units.map(([single, many]) => {
@@ -648,7 +677,7 @@ function ItemForm({
                 type="button"
                 aria-pressed={on}
                 onClick={() => setUnit(on ? '' : one ? single : many)}
-                className={`min-h-12 shrink-0 rounded-full border-2 border-ink px-4 text-base font-bold ${
+                className={`min-h-12 shrink-0 rounded-full border-2 border-ink px-3.5 text-base font-bold ${
                   on ? 'bg-ink text-white' : 'bg-white text-ink active:bg-gray-100'
                 }`}
               >
@@ -659,16 +688,12 @@ function ItemForm({
         </div>
       </div>
 
-      <TextField
-        label={t.item}
-        placeholder={t.itemPlaceholder}
-        value={item}
-        onChange={(e) => setItem(e.target.value)}
-        autoFocus={!existing}
-      />
-      <Button type="submit" className="w-full" disabled={!item.trim()}>
-        {t.save}
-      </Button>
+      {/* stays in view at the bottom of the sheet if a small phone has to scroll the form */}
+      <div className="sticky bottom-0 -mx-4 bg-white px-4 pt-1">
+        <Button type="submit" className="w-full" disabled={!item.trim()}>
+          {t.save}
+        </Button>
+      </div>
       {existing && (
         <Button variant="danger" className="w-full" onClick={() => onDelete(existing)}>
           <TrashIcon />

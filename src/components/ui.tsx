@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from 'react'
 import { useApp } from '../AppContext'
+import { useKeyboardArea } from '../lib/viewport'
 
 // ---------------------------------------------------------------------------
 // Buttons
@@ -48,10 +49,11 @@ export function TextField({
       <label htmlFor={id} className="mb-1 block text-base font-bold">
         {label}
       </label>
+      {/* 18px text: under 16px iPhones zoom the page when the field is tapped */}
       <input
         id={id}
         {...props}
-        className="block min-h-14 w-full rounded-xl border-2 border-ink bg-white px-4 text-xl text-ink placeholder:text-gray-500 focus:outline-4 focus:outline-offset-0 focus:outline-brand"
+        className="block min-h-12 w-full rounded-xl border-2 border-ink bg-white px-3 text-lg text-ink placeholder:text-gray-500 focus:outline-4 focus:outline-offset-0 focus:outline-brand"
       />
     </div>
   )
@@ -136,6 +138,7 @@ export function Sheet({
   children: ReactNode
 }) {
   const { t } = useApp()
+  const keyboard = useKeyboardArea()
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -150,17 +153,23 @@ export function Sheet({
 
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-40 flex flex-col justify-end">
+    // While the keyboard is up, sit in the part of the screen it leaves visible instead of behind it.
+    <div
+      className="fixed inset-0 z-40 flex flex-col justify-end"
+      style={keyboard ? { top: keyboard.top, height: keyboard.height, bottom: 'auto' } : undefined}
+    >
       <div className="absolute inset-0 animate-fade-in bg-black/60" onClick={onClose} aria-hidden="true" />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative mx-auto max-h-[92dvh] w-full max-w-xl animate-sheet-up overflow-y-auto rounded-t-3xl bg-white px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl"
+        className={`relative mx-auto max-h-[calc(100%-env(safe-area-inset-top)-0.5rem)] w-full max-w-xl animate-sheet-up overflow-y-auto rounded-t-3xl bg-white px-4 pt-2 shadow-2xl ${
+          keyboard ? 'pb-3' : 'pb-[max(1rem,env(safe-area-inset-bottom))]'
+        }`}
       >
-        <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-gray-300" aria-hidden="true" />
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-2xl font-black">{title}</h2>
+        {!keyboard && <div className="mx-auto mb-1 h-1.5 w-12 rounded-full bg-gray-300" aria-hidden="true" />}
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h2 className="text-xl font-black">{title}</h2>
           <button
             type="button"
             onClick={onClose}
