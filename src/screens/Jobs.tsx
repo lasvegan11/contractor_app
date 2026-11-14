@@ -17,6 +17,9 @@ import {
   TextField,
   UserIcon,
 } from '../components/ui'
+import { JobKindIcon } from '../components/JobKindIcon'
+import { JobKindTiles } from '../components/JobKindPicker'
+import { isJobKind, jobKindName, type JobKindId } from '../data/jobKinds'
 import { cachedJobs, createJob, loadJobs, onSyncChange } from '../lib/data'
 import { timeAgo } from '../lib/i18n'
 import { useInstallHint } from '../lib/install'
@@ -110,9 +113,9 @@ export function Jobs() {
       <NewJobSheet
         open={creating}
         onClose={() => setCreating(false)}
-        onCreate={(name, address) => {
+        onCreate={(name, address, trade) => {
           if (!uid) return
-          const job = createJob(uid, name, address)
+          const job = createJob(uid, name, address, trade)
           setCreating(false)
           navigate(`/job/${job.id}`)
         }}
@@ -159,6 +162,7 @@ function JobCard({ job }: { job: Job }) {
   const total = job.item_count
   const picked = Math.min(job.picked_count, total)
   const done = total > 0 && picked === total
+  const kind = isJobKind(job.trade) ? job.trade : null
   return (
     <Link
       to={`/job/${job.id}`}
@@ -166,10 +170,20 @@ function JobCard({ job }: { job: Job }) {
     >
       <div className="min-w-0 flex-1">
         <div className="text-xl leading-snug font-black break-words">{job.name}</div>
-        {job.address && (
-          <div className="mt-1 flex items-center gap-1 text-base text-muted">
-            <PinIcon className="size-4 shrink-0" />
-            <span className="truncate">{job.address}</span>
+        {(kind || job.address) && (
+          <div className="mt-1 flex min-w-0 items-center gap-3 text-base text-muted">
+            {kind && (
+              <span className="flex shrink-0 items-center gap-1 font-semibold text-ink">
+                <JobKindIcon kind={kind} className="size-4" />
+                {jobKindName(kind, lang)}
+              </span>
+            )}
+            {job.address && (
+              <span className="flex min-w-0 items-center gap-1">
+                <PinIcon className="size-4 shrink-0" />
+                <span className="truncate">{job.address}</span>
+              </span>
+            )}
           </div>
         )}
         <div className="mt-3 flex items-center justify-between gap-3 text-base font-semibold">
@@ -195,15 +209,9 @@ function JobCard({ job }: { job: Job }) {
   )
 }
 
-function NewJobSheet({
-  open,
-  onClose,
-  onCreate,
-}: {
-  open: boolean
-  onClose: () => void
-  onCreate: (name: string, address: string | null) => void
-}) {
+type OnCreate = (name: string, address: string | null, trade: JobKindId | null) => void
+
+function NewJobSheet({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: OnCreate }) {
   const { t } = useApp()
   return (
     <Sheet open={open} title={t.newJob} onClose={onClose}>
@@ -212,20 +220,39 @@ function NewJobSheet({
   )
 }
 
-/** Mounted fresh each time the sheet opens, so it always starts empty. */
-function NewJobForm({ onCreate }: { onCreate: (name: string, address: string | null) => void }) {
-  const { t } = useApp()
+/**
+ * Mounted fresh each time the sheet opens, so it always starts empty.
+ * Kind-of-job tiles come first, before any text field, so the keyboard doesn't cover them.
+ */
+function NewJobForm({ onCreate }: { onCreate: OnCreate }) {
+  const { t, lang } = useApp()
+  // undefined: still choosing. null: skipped.
+  const [kind, setKind] = useState<JobKindId | null | undefined>(undefined)
   const [name, setName] = useState('')
   const [address, setAddress] = useState('')
+
+  if (kind === undefined) return <JobKindTiles onPick={setKind} onSkip={() => setKind(null)} />
 
   function submit(e: FormEvent) {
     e.preventDefault()
     if (!name.trim()) return
-    onCreate(name.trim(), address.trim() || null)
+    onCreate(name.trim(), address.trim() || null, kind ?? null)
   }
 
   return (
     <form onSubmit={submit} className="space-y-4">
+      {/* what they picked; tap to go back to the tiles */}
+      <button
+        type="button"
+        onClick={() => setKind(undefined)}
+        className={`flex min-h-12 w-full items-center gap-2 rounded-xl border-2 border-ink px-3 text-left text-lg font-bold active:bg-gray-100 ${
+          kind ? 'bg-brand/25' : 'border-dashed bg-white'
+        }`}
+      >
+        {kind && <JobKindIcon kind={kind} className="size-6 shrink-0" />}
+        <span className="min-w-0 flex-1 truncate">{kind ? jobKindName(kind, lang) : t.pickKind}</span>
+        {kind && <span className="shrink-0 text-base font-semibold text-muted underline">{t.change}</span>}
+      </button>
       <TextField
         label={t.jobName}
         placeholder={t.jobNamePlaceholder}

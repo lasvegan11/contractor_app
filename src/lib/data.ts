@@ -58,8 +58,11 @@ const sortJobs = (jobs: Job[]) => [...jobs].sort((a, b) => b.updated_at.localeCo
 const sortMats = (mats: Material[]) =>
   [...mats].sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at))
 
+/** Jobs saved on the phone before a field existed get its empty value (PostgREST needs every row in a batch to have the same keys). */
+const jobDefaults = (j: Job): Job => ({ ...j, trade: j.trade ?? null })
+
 export function cachedJobs(uid: string): Job[] {
-  return readJSON<Job[]>(key(uid, 'jobs'), []).map((j) => ({ ...j, picked_count: j.picked_count ?? 0 }))
+  return readJSON<Job[]>(key(uid, 'jobs'), []).map((j) => ({ ...jobDefaults(j), picked_count: j.picked_count ?? 0 }))
 }
 function saveJobs(uid: string, jobs: Job[]) {
   writeJSON(key(uid, 'jobs'), sortJobs(jobs))
@@ -111,7 +114,7 @@ export async function loadJobs(uid: string): Promise<Job[]> {
 
   const { data, error } = await sb()
     .from('jobs')
-    .select('id, user_id, name, address, created_at, updated_at, materials(picked_up)')
+    .select('id, user_id, name, address, trade, created_at, updated_at, materials(picked_up)')
     .order('updated_at', { ascending: false })
     .returns<JobRow[]>()
   if (error || !data) return sortJobs(local)
@@ -123,7 +126,7 @@ export async function loadJobs(uid: string): Promise<Job[]> {
   const ob = getOutbox(uid)
   for (const op of Object.values(ob.jobs)) {
     if (op.op === 'delete') byId.delete(op.id)
-    else byId.set(op.row.id, { ...byId.get(op.row.id), ...op.row })
+    else byId.set(op.row.id, { ...byId.get(op.row.id), ...jobDefaults(op.row) })
   }
   const jobsWithPendingItems = new Set(
     Object.values(ob.mats).map((op) => (op.op === 'upsert' ? op.row.job_id : op.job_id)),
@@ -152,7 +155,7 @@ export async function loadJob(uid: string, jobId: string): Promise<Job | null> {
   if (local || DEMO) return local ?? null
   const { data } = await sb()
     .from('jobs')
-    .select('id, user_id, name, address, created_at, updated_at')
+    .select('id, user_id, name, address, trade, created_at, updated_at')
     .eq('id', jobId)
     .maybeSingle()
   return data ? { ...data, item_count: 0, picked_count: 0 } : null
@@ -165,13 +168,14 @@ function queueJob(uid: string, job: Job) {
   void flush(uid)
 }
 
-export function createJob(uid: string, name: string, address: string | null): Job {
+export function createJob(uid: string, name: string, address: string | null, trade: string | null = null): Job {
   const now = new Date().toISOString()
   const job: Job = {
     id: newId(),
     user_id: uid,
     name: name.trim(),
     address: address?.trim() || null,
+    trade,
     created_at: now,
     updated_at: now,
     item_count: 0,
@@ -182,14 +186,15 @@ export function createJob(uid: string, name: string, address: string | null): Jo
   return job
 }
 
-/** Rename a job or change its address. Returns the updated job, or null if it's gone. */
-export function updateJob(uid: string, jobId: string, patch: Pick<Job, 'name' | 'address'>): Job | null {
+/** Rename a job, or change its address or kind. Returns the updated job, or null if it's gone. */
+export function updateJob(uid: string, jobId: string, patch: Pick<Job, 'name' | 'address' | 'trade'>): Job | null {
   const current = cachedJobs(uid).find((j) => j.id === jobId)
   if (!current) return null
   const job: Job = {
     ...current,
     name: patch.name.trim(),
     address: patch.address?.trim() || null,
+    trade: patch.trade,
     updated_at: new Date().toISOString(),
   }
   saveJobs(uid, cachedJobs(uid).map((j) => (j.id === jobId ? job : j)))
@@ -358,7 +363,10 @@ async function pushOutbox(uid: string): Promise<void> {
     jobUpserts,
     (batch) =>
       client.from('jobs').upsert(
-        batch.map(({ row: { item_count: _items, picked_count: _picked, ...rest } }) => rest),
+        batch.map(({ row }) => {
+          const { item_count: _items, picked_count: _picked, ...rest } = jobDefaults(row)
+          return rest
+        }),
         { onConflict: 'id' },
       ),
     (batch) => settle(uid, batch, 'jobs'),

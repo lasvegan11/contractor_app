@@ -14,6 +14,8 @@ export interface Job {
   user_id: string
   name: string
   address: string | null
+  /** Kind of job, an id from src/data/jobKinds.ts ("drywall", "bath"…), or null if skipped. */
+  trade: string | null
   created_at: string
   updated_at: string
   /** Client-only: counted from the job's materials, never sent to the server. */

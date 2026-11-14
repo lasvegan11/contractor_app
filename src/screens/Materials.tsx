@@ -31,6 +31,8 @@ import {
   XIcon,
   useToast,
 } from '../components/ui'
+import { JobKindChips } from '../components/JobKindPicker'
+import { jobKindName } from '../data/jobKinds'
 import {
   cachedMaterials,
   commitMaterials,
@@ -229,6 +231,7 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
   }
 
   const hasText = text.trim().length > 0
+  const subtitle = [jobKindName(job?.trade, lang), job?.address].filter(Boolean).join(' · ')
   const needed = items.filter((m) => !m.picked_up)
   const done = items.filter((m) => m.picked_up)
   const row = (m: Material) => (
@@ -264,7 +267,7 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
           className="min-h-12 min-w-0 flex-1 rounded-xl px-1 text-left active:bg-gray-100"
         >
           <h1 className="truncate text-xl leading-tight font-black">{job?.name ?? ''}</h1>
-          {job?.address && <p className="truncate text-sm text-muted">{job.address}</p>}
+          {subtitle && <p className="truncate text-sm text-muted">{subtitle}</p>}
         </button>
         <button
           type="button"
@@ -410,8 +413,8 @@ function MaterialsScreen({ uid, jobId }: { uid: string; jobId: string }) {
           job={job}
           itemCount={items.length}
           onClose={() => setJobOpen(false)}
-          onSave={(name, address) => {
-            const updated = updateJob(uid, job.id, { name, address })
+          onSave={(name, address, trade) => {
+            const updated = updateJob(uid, job.id, { name, address, trade })
             if (updated) setJob(updated)
             setJobOpen(false)
           }}
@@ -854,7 +857,7 @@ function JobSheet({
   onClose: () => void
   job: Job
   itemCount: number
-  onSave: (name: string, address: string | null) => void
+  onSave: (name: string, address: string | null, trade: string | null) => void
   onDelete: () => void
 }) {
   const { t } = useApp()
@@ -873,12 +876,13 @@ function JobForm({
 }: {
   job: Job
   itemCount: number
-  onSave: (name: string, address: string | null) => void
+  onSave: (name: string, address: string | null, trade: string | null) => void
   onDelete: () => void
 }) {
   const { t } = useApp()
   const [name, setName] = useState(job.name)
   const [address, setAddress] = useState(job.address ?? '')
+  const [trade, setTrade] = useState(job.trade)
   const [confirming, setConfirming] = useState(false)
 
   if (confirming) {
@@ -899,7 +903,7 @@ function JobForm({
   function submit(e: FormEvent) {
     e.preventDefault()
     if (!name.trim()) return
-    onSave(name.trim(), address.trim() || null)
+    onSave(name.trim(), address.trim() || null, trade)
   }
 
   return (
@@ -911,6 +915,7 @@ function JobForm({
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
+      <JobKindChips value={trade} onChange={setTrade} />
       <TextField
         label={t.address}
         placeholder={t.addressPlaceholder}
